@@ -2,39 +2,82 @@ provider "aws" {
   region = "ap-south-1"
 }
 
-# Reuse existing IAM role (already created manually)
-data "aws_iam_role" "ec2_role" {
-  name = "ec2-secrets-role"
+# Fetch latest Amazon Linux 2 AMI
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+  }
 }
 
-# Ensure Secrets Manager access is attached
-resource "aws_iam_role_policy_attachment" "secrets" {
-  role       = data.aws_iam_role.ec2_role.name
+# IAM Role for EC2
+resource "aws_iam_role" "ec2_role" {
+  name = "ec2-secrets-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+# Attach Secrets Manager policy
+resource "aws_iam_role_policy_attachment" "secrets_policy" {
+  role       = aws_iam_role.ec2_role.name
   policy_arn = "arn:aws:iam::aws:policy/SecretsManagerReadWrite"
 }
 
-# Reuse existing IAM instance profile (DO NOT recreate)
-data "aws_iam_instance_profile" "ec2_profile" {
-  name = "ec2-profile"
+# Instance profile
+resource "aws_iam_instance_profile" "ec2_profile" {
+  name = "ec2-instance-profile"
+  role = aws_iam_role.ec2_role.name
+}
+
+# Security group for SSH
+resource "aws_security_group" "allow_ssh" {
+  name = "allow-ssh"
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 }
 
 # EC2 Instance
-resource "aws_instance" "app" {
-  ami           = "ami-0f58b397bc5c1f2e8" # Amazon Linux 2
-  instance_type = "t2.micro"
-  key_name      = var.key_name
+resource "aws_instance" "app_ec2" {
+  ami                  = data.aws_ami.amazon_linux.id
+  instance_type        = "t2.micro"
+  key_name             = "devops-key-new"
+  iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
+  security_groups      = [aws_security_group.allow_ssh.name]
 
-  iam_instance_profile = data.aws_iam_instance_profile.ec2_profile.name
-
-  user_data = <<EOF
-#!/bin/bash
-yum update -y
-amazon-linux-extras install docker -y
-service docker start
-usermod -aG docker ec2-user
-EOF
+  user_data = <<-EOF
+    #!/bin/bash
+    yum update -y
+    amazon-linux-extras install docker -y
+    systemctl start docker
+    systemctl enable docker
+    usermod -aG docker ec2-user
+  EOF
 
   tags = {
-    Name = "devops-assignment"
+    Name = "devops-task-ec2"
   }
 }

@@ -1,10 +1,13 @@
 import boto3
 import json
 
-print("App started...")
+SECRET_NAME = "my-app-secret"
+REGION = "ap-south-1"
 
-client = boto3.client('secretsmanager', region_name='ap-south-1')
-response = client.get_secret_value(SecretId='demo/app')
+client = boto3.client("secretsmanager", region_name=REGION)
+response = client.get_secret_value(SecretId=SECRET_NAME)
 
-secret = json.loads(response['SecretString'])
-print("Secret fetched successfully:", secret["APP_MESSAGE"])
+secret = json.loads(response["SecretString"])
+
+print("✅ Secret retrieved successfully")
+print("DB USER:", secret["db_user"])
