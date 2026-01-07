@@ -1,5 +1,11 @@
 FROM python:3.10-slim
+
 WORKDIR /app
-COPY app.py .
-RUN pip install boto3
+
+COPY app/app.py .
+
+RUN pip install flask boto3
+
+EXPOSE 5000
+
 CMD ["python", "app.py"]

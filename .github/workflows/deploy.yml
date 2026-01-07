@@ -1,0 +1,51 @@
+name: Deploy DevOps Assignment
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.6
+
+    - name: Terraform Init
+      working-directory: terraform
+      run: terraform init
+
+    - name: Terraform Apply
+      working-directory: terraform
+      env:
+        TF_VAR_key_name: devops-key-new
+      run: terraform apply -auto-approve
+
+    - name: Get EC2 Public IP
+      id: ip
+      working-directory: terraform
+      run: |
+        echo "EC2_IP=$(terraform output -raw ec2_public_ip)" >> $GITHUB_ENV
+
+    - name: Deploy app on EC2 via SSM
+      run: |
+        aws ssm send-command \
+          --document-name "AWS-RunShellScript" \
+          --targets "Key=tag:Name,Values=devops-assignment" \
+          --parameters commands='[
+            "cd /home/ubuntu || exit 1",
+            "rm -rf devops-assignment",
+            "git clone https://github.com/${{ github.repository }}.git",
+            "cd devops-assignment",
+            "docker build -t devops-assignment-app -f docker/Dockerfile .",
+            "docker rm -f devops-app || true",
+            "docker run -d -p 5000:5000 --restart unless-stopped --name devops-app devops-assignment-app"
+          ]' \
+          --region ap-south-1
