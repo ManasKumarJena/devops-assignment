@@ -1,9 +1,16 @@
-name: Deploy DevOps Assignment
+name: Deploy DevOps Assignment (Clean & Secure)
 
 on:
   push:
     branches:
       - main
+
+  workflow_dispatch:
+    inputs:
+      confirm_destroy:
+        description: "Type DESTROY_AND_DEPLOY to recreate infrastructure"
+        required: true
+        default: ""
 
 jobs:
   deploy:
@@ -16,35 +23,60 @@ jobs:
       TF_VAR_key_name: devops-key-new
 
     steps:
+    # 1️⃣ Checkout code
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    # 2️⃣ Validate manual confirmation (only for manual trigger)
+    - name: Validate destroy confirmation
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        if [ "${{ github.event.inputs.confirm_destroy }}" != "DESTROY_AND_DEPLOY" ]; then
+          echo "❌ Invalid confirmation key. Aborting."
+          exit 1
+        fi
+        echo "✅ Confirmation validated."
+
+    # 3️⃣ Setup Terraform
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
 
+    # 4️⃣ Terraform Init
     - name: Terraform Init
       working-directory: terraform
       run: terraform init
 
+    # 5️⃣ Destroy old infrastructure (clean slate)
+    - name: Terraform Destroy
+      working-directory: terraform
+      run: terraform destroy -auto-approve
+
+    # 6️⃣ Create fresh infrastructure
     - name: Terraform Apply
       working-directory: terraform
       run: terraform apply -auto-approve
 
-    - name: Fetch EC2 Public IP
-      working-directory: terraform
+    # 7️⃣ Deploy application via SSM (NO SSH)
+    - name: Deploy Docker app via SSM
       run: |
-        echo "EC2_IP=$(terraform output -raw ec2_public_ip)" >> $GITHUB_ENV
+        aws ssm send-command \
+          --document-name "AWS-RunShellScript" \
+          --targets "Key=tag:Name,Values=devops-assignment" \
+          --parameters commands='[
+            "sudo yum update -y",
+            "sudo yum install -y docker git",
+            "sudo service docker start",
 
-    - name: Deploy Docker app on EC2
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ env.EC2_IP }}
-        username: ec2-user
-        key: ${{ secrets.EC2_KEY }}
-        script: |
-          sudo docker rm -f devops-app || true
-          rm -rf devops-assignment || true
-          git clone https://github.com/${{ github.repository }}.git
-          cd devops-assignment
-          sudo docker build -t devops-app .
-          sudo docker run -d --name devops-app devops-app
+            "echo Cleaning old Docker resources",
+            "sudo docker rm -f $(sudo docker ps -aq) || true",
+            "sudo docker rmi -f $(sudo docker images -aq) || true",
+
+            "cd /home/ec2-user",
+            "sudo rm -rf devops-assignment",
+
+            "git clone https://github.com/${{ github.repository }}.git",
+            "cd devops-assignment",
+
+            "sudo docker build -t devops-app:latest .",
+            "sudo docker run -d --restart unless-stopped --name devops-app devops-app:latest"
+          ]'
