@@ -1,4 +1,4 @@
-name: Deploy DevOps Assignment (Clean & Secure)
+name: DevOps Assignment Pipeline
 
 on:
   push:
@@ -7,8 +7,8 @@ on:
 
   workflow_dispatch:
     inputs:
-      confirm_destroy:
-        description: "Type DESTROY_AND_DEPLOY to recreate infrastructure"
+      confirm_deploy:
+        description: "Type DEPLOY to run this pipeline manually"
         required: true
         default: ""
 
@@ -17,25 +17,24 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
+      AWS_REGION: ap-south-1
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      AWS_DEFAULT_REGION: ap-south-1
-      TF_VAR_key_name: devops-key-new
 
     steps:
     # 1️⃣ Checkout code
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # 2️⃣ Validate manual confirmation (only for manual trigger)
-    - name: Validate destroy confirmation
+    # 2️⃣ Validate manual trigger confirmation
+    - name: Validate manual confirmation
       if: github.event_name == 'workflow_dispatch'
       run: |
-        if [ "${{ github.event.inputs.confirm_destroy }}" != "DESTROY_AND_DEPLOY" ]; then
+        if [ "${{ github.event.inputs.confirm_deploy }}" != "DEPLOY" ]; then
           echo "❌ Invalid confirmation key. Aborting."
           exit 1
         fi
-        echo "✅ Confirmation validated."
+        echo "✅ Manual confirmation validated."
 
     # 3️⃣ Setup Terraform
     - name: Setup Terraform
@@ -46,37 +45,28 @@ jobs:
       working-directory: terraform
       run: terraform init
 
-    # 5️⃣ Destroy old infrastructure (clean slate)
-    - name: Terraform Destroy
-      working-directory: terraform
-      run: terraform destroy -auto-approve
-
-    # 6️⃣ Create fresh infrastructure
+    # 5️⃣ Terraform Apply (create/update infrastructure)
     - name: Terraform Apply
       working-directory: terraform
       run: terraform apply -auto-approve
 
-    # 7️⃣ Deploy application via SSM (NO SSH)
+    # 6️⃣ Deploy application using AWS SSM (NO SSH)
     - name: Deploy Docker app via SSM
       run: |
         aws ssm send-command \
+          --region $AWS_REGION \
           --document-name "AWS-RunShellScript" \
           --targets "Key=tag:Name,Values=devops-assignment" \
           --parameters commands='[
-            "sudo yum update -y",
             "sudo yum install -y docker git",
-            "sudo service docker start",
-
-            "echo Cleaning old Docker resources",
-            "sudo docker rm -f $(sudo docker ps -aq) || true",
-            "sudo docker rmi -f $(sudo docker images -aq) || true",
+            "sudo systemctl enable docker",
+            "sudo systemctl start docker",
 
             "cd /home/ec2-user",
-            "sudo rm -rf devops-assignment",
-
+            "rm -rf devops-assignment",
             "git clone https://github.com/${{ github.repository }}.git",
             "cd devops-assignment",
 
-            "sudo docker build -t devops-app:latest .",
-            "sudo docker run -d --restart unless-stopped --name devops-app devops-app:latest"
+            "sudo docker build -t devops-app -f docker/Dockerfile .",
+            "sudo docker run -d -p 80:5000 --restart unless-stopped --name devops-app devops-app"
           ]'

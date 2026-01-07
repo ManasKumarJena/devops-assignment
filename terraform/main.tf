@@ -1,53 +1,92 @@
+terraform {
+  required_version = ">= 1.3.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
 provider "aws" {
   region = "ap-south-1"
 }
 
-# Fetch latest Amazon Linux 2 AMI
-data "aws_ami" "amazon_linux" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
-  }
-}
-
-# IAM Role for EC2
+# -------------------------------------------------
+# IAM ROLE FOR EC2 (SSM + PARAMETER STORE)
+# -------------------------------------------------
 resource "aws_iam_role" "ec2_role" {
-  name = "ec2-secrets-role"
+  name = "devops-assignment-ec2-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Principal = {
-        Service = "ec2.amazonaws.com"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
       }
-      Action = "sts:AssumeRole"
-    }]
+    ]
   })
 }
 
-# Attach Secrets Manager policy
-resource "aws_iam_role_policy_attachment" "secrets_policy" {
+# Attach SSM core policy
+resource "aws_iam_role_policy_attachment" "ssm_core" {
   role       = aws_iam_role.ec2_role.name
-  policy_arn = "arn:aws:iam::aws:policy/SecretsManagerReadWrite"
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# Instance profile
+# Custom policy to read SSM Parameter
+resource "aws_iam_policy" "ssm_read_secret" {
+  name = "devops-assignment-ssm-read-secret"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters"
+        ]
+        Resource = aws_ssm_parameter.app_secret.arn
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "attach_ssm_secret_policy" {
+  role       = aws_iam_role.ec2_role.name
+  policy_arn = aws_iam_policy.ssm_read_secret.arn
+}
+
 resource "aws_iam_instance_profile" "ec2_profile" {
-  name = "ec2-instance-profile"
+  name = "devops-assignment-instance-profile"
   role = aws_iam_role.ec2_role.name
 }
 
-# Security group for SSH
-resource "aws_security_group" "allow_ssh" {
-  name = "allow-ssh"
+# -------------------------------------------------
+# SSM PARAMETER STORE (SECRET)
+# -------------------------------------------------
+resource "aws_ssm_parameter" "app_secret" {
+  name  = "/devops-assignment/app/SECRET_KEY"
+  type  = "SecureString"
+  value = "my-super-secret-value"
+}
+
+# -------------------------------------------------
+# SECURITY GROUP
+# -------------------------------------------------
+resource "aws_security_group" "app_sg" {
+  name        = "devops-assignment-sg"
+  description = "Allow HTTP traffic"
 
   ingress {
-    from_port   = 22
-    to_port     = 22
+    from_port   = 80
+    to_port     = 80
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -60,24 +99,16 @@ resource "aws_security_group" "allow_ssh" {
   }
 }
 
-# EC2 Instance
+# -------------------------------------------------
+# EC2 INSTANCE
+# -------------------------------------------------
 resource "aws_instance" "app_ec2" {
-  ami                  = data.aws_ami.amazon_linux.id
-  instance_type        = "t2.micro"
-  key_name             = "devops-key-new"
-  iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
-  security_groups      = [aws_security_group.allow_ssh.name]
-
-  user_data = <<-EOF
-    #!/bin/bash
-    yum update -y
-    amazon-linux-extras install docker -y
-    systemctl start docker
-    systemctl enable docker
-    usermod -aG docker ec2-user
-  EOF
+  ami                    = "ami-03f4878755434977f" # Amazon Linux 2 (ap-south-1)
+  instance_type          = "t2.micro"
+  iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
+  vpc_security_group_ids = [aws_security_group.app_sg.id]
 
   tags = {
-    Name = "devops-task-ec2"
+    Name = "devops-assignment"
   }
 }

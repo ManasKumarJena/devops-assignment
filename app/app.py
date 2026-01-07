@@ -1,13 +1,27 @@
 import boto3
-import json
+from flask import Flask
 
-SECRET_NAME = "my-app-secret"
-REGION = "ap-south-1"
+app = Flask(__name__)
 
-client = boto3.client("secretsmanager", region_name=REGION)
-response = client.get_secret_value(SecretId=SECRET_NAME)
+def get_secret():
+    try:
+        ssm = boto3.client("ssm", region_name="ap-south-1")
+        response = ssm.get_parameter(
+            Name="/devops-assignment/app/SECRET_KEY",
+            WithDecryption=True
+        )
+        secret = response["Parameter"]["Value"]
+        print("✅ Secret fetched successfully")
+        return secret
+    except Exception as e:
+        print("❌ Failed to fetch secret:", e)
+        return None
 
-secret = json.loads(response["SecretString"])
+SECRET_VALUE = get_secret()
 
-print("✅ Secret retrieved successfully")
-print("DB USER:", secret["db_user"])
+@app.route("/")
+def home():
+    return "App is running successfully!"
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
