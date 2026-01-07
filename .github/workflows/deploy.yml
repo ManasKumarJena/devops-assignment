@@ -7,8 +7,8 @@ on:
 
   workflow_dispatch:
     inputs:
-      confirm_deploy:
-        description: "Type DEPLOY to run this pipeline manually"
+      confirm_destroy:
+        description: "Type DESTROY_AND_DEPLOY to destroy and recreate infrastructure"
         required: true
         default: ""
 
@@ -27,14 +27,14 @@ jobs:
       uses: actions/checkout@v4
 
     # 2️⃣ Validate manual trigger confirmation
-    - name: Validate manual confirmation
+    - name: Validate destroy confirmation
       if: github.event_name == 'workflow_dispatch'
       run: |
-        if [ "${{ github.event.inputs.confirm_deploy }}" != "DEPLOY" ]; then
+        if [ "${{ github.event.inputs.confirm_destroy }}" != "DESTROY_AND_DEPLOY" ]; then
           echo "❌ Invalid confirmation key. Aborting."
           exit 1
         fi
-        echo "✅ Manual confirmation validated."
+        echo "✅ Destroy confirmation validated."
 
     # 3️⃣ Setup Terraform
     - name: Setup Terraform
@@ -45,12 +45,18 @@ jobs:
       working-directory: terraform
       run: terraform init
 
-    # 5️⃣ Terraform Apply (create/update infrastructure)
+    # 5️⃣ Terraform Destroy (manual trigger only)
+    - name: Terraform Destroy
+      if: github.event_name == 'workflow_dispatch'
+      working-directory: terraform
+      run: terraform destroy -auto-approve
+
+    # 6️⃣ Terraform Apply
     - name: Terraform Apply
       working-directory: terraform
       run: terraform apply -auto-approve
 
-    # 6️⃣ Deploy application using AWS SSM (NO SSH)
+    # 7️⃣ Deploy application using AWS SSM (NO SSH)
     - name: Deploy Docker app via SSM
       run: |
         aws ssm send-command \
@@ -58,15 +64,17 @@ jobs:
           --document-name "AWS-RunShellScript" \
           --targets "Key=tag:Name,Values=devops-assignment" \
           --parameters commands='[
-            "sudo yum install -y docker git",
+            "sudo apt update -y",
+            "sudo apt install -y docker.io git",
             "sudo systemctl enable docker",
             "sudo systemctl start docker",
 
-            "cd /home/ec2-user",
+            "cd /home/ssm-user",
             "rm -rf devops-assignment",
             "git clone https://github.com/${{ github.repository }}.git",
             "cd devops-assignment",
 
             "sudo docker build -t devops-app -f docker/Dockerfile .",
+            "sudo docker rm -f devops-app || true",
             "sudo docker run -d -p 80:5000 --restart unless-stopped --name devops-app devops-app"
           ]'
