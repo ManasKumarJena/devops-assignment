@@ -7,16 +7,15 @@ data "aws_iam_role" "ec2_role" {
   name = "ec2-secrets-role"
 }
 
-# Attach Secrets Manager access to the role
+# Ensure Secrets Manager access is attached
 resource "aws_iam_role_policy_attachment" "secrets" {
   role       = data.aws_iam_role.ec2_role.name
   policy_arn = "arn:aws:iam::aws:policy/SecretsManagerReadWrite"
 }
 
-# Instance profile for EC2
-resource "aws_iam_instance_profile" "ec2_profile" {
+# Reuse existing IAM instance profile (DO NOT recreate)
+data "aws_iam_instance_profile" "ec2_profile" {
   name = "ec2-profile"
-  role = data.aws_iam_role.ec2_role.name
 }
 
 # EC2 Instance
@@ -25,7 +24,7 @@ resource "aws_instance" "app" {
   instance_type = "t2.micro"
   key_name      = var.key_name
 
-  iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
+  iam_instance_profile = data.aws_iam_instance_profile.ec2_profile.name
 
   user_data = <<EOF
 #!/bin/bash
