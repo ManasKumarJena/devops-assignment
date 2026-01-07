@@ -4,8 +4,6 @@ WORKDIR /app
 
 COPY app/app.py .
 
-RUN pip install flask boto3
-
-EXPOSE 5000
+RUN pip install boto3
 
 CMD ["python", "app.py"]
